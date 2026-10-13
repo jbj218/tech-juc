@@ -1,0 +1,13 @@
+# 课程原始资料：体积大（86M），且为课程方素材，不随笔记发布
+JUC狂神源资料/
+
+# 编辑器 / 构建产物
+.idea/
+target/
+*.iml
+*.class
+
+# 系统文件
+Thumbs.db
+Desktop.ini
+.DS_Store
