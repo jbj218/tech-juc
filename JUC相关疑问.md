@@ -814,3 +814,138 @@ ABA 问题的本质是：一个值从 A 变成 B，又变回 A，CAS 检查时�
 - `AtomicMarkableReference`：配一个 **boolean 标记**，适合只关心“有没有被改过”的场景。
 
 它们才是专门为 ABA 设计的。而 `AtomicReference` 只是“能 CAS 引用”的基础设施。
+
+# JUC知识点补充
+
+## 1.ThreadLocal
+
+### ThreadLocal作用
+
+通常情况下，我们创建的变量可以被任何一个线程访问和修改。这在多线程环境中可能导致数据竞争和线程安全问题。那么，**如果想让每个线程都有自己的专属本地变量，该如何实现呢？**
+
+JDK 中提供的 `ThreadLocal` 类正是为了解决这个问题。**`ThreadLocal` 类允许每个线程绑定自己的值**，可以将其形象地比喻为一个“存放数据的盒子”。每个线程都有自己独立的盒子，用于存储私有数据，确保不同线程之间的数据互不干扰。
+
+当你创建一个 `ThreadLocal` 变量时，每个访问该变量的线程都会拥有一个独立的副本。这也是 `ThreadLocal` 名称的由来。线程可以通过 `get()` 方法获取自己线程的本地副本，或通过 `set()` 方法修改该副本的值，从而避免了线程安全问题。
+
+举个简单的例子：假设有两个人去宝屋收集宝物。如果他们共用一个袋子，必然会产生争执；但如果每个人都有一个独立的袋子，就不会有这个问题。如果将这两个人比作线程，那么 `ThreadLocal` 就是用来避免这两个线程竞争同一个资源的方法。
+
+```java
+public class ThreadLocalExample {
+    private static ThreadLocal<Integer> threadLocal = ThreadLocal.withInitial(() -> 0);
+
+    public static void main(String[] args) {
+        Runnable task = () -> {
+            int value = threadLocal.get();
+            value += 1;
+            threadLocal.set(value);
+            System.out.println(Thread.currentThread().getName() + " Value: " + threadLocal.get());
+        };
+
+        Thread thread1 = new Thread(task, "Thread-1");
+        Thread thread2 = new Thread(task, "Thread-2");
+
+        thread1.start(); // 输出: Thread-1 Value: 1
+        thread2.start(); // 输出: Thread-2 Value: 1
+    }
+}
+```
+
+### ThreadLocal内存泄漏问题
+
+==关键点==：`ThreadLocalMap` 中的**key是弱引用，value是强引用**。如果**Thread实例**失去强引用后，弱引用会被回收，而value这个强引用不会回收，导致别的Thread读到脏值。
+
+
+
+每个线程维护一个名为 `ThreadLocalMap` 的 map。 当你使用 `ThreadLocal` 存储值时，实际上是将值存储在当前线程的 `ThreadLocalMap` 中，其中 `ThreadLocal` 实例本身作为 key，而你要存储的值作为 value。
+
+
+`ThreadLocalMap` 的 `key` 和 `value` 引用机制：
+
+- **key 是弱引用**：`ThreadLocalMap` 中的 key 是 `ThreadLocal` 的弱引用 (`WeakReference<ThreadLocal<?>>`)。 这意味着，如果 `ThreadLocal` 实例不再被任何强引用指向，垃圾回收器会在下次 GC 时回收该实例，导致 `ThreadLocalMap` 中对应的 key 变为 `null`。
+- **value 是强引用**：即使 `key` 被 GC 回收，`value` 仍然被 `ThreadLocalMap.Entry` 强引用存在，无法被 GC 回收。
+
+当 `ThreadLocal` 实例失去强引用后，其对应的 value 仍然存在于 `ThreadLocalMap` 中，因为 `Entry` 对象强引用了它。如果线程持续存活（例如线程池中的线程），`ThreadLocalMap` 也会一直存在，导致 key 为 `null` 的 entry 无法被垃圾回收，即会造成内存泄漏。
+
+也就是说，内存泄漏的发生需要同时满足==两个条件==：
+
+1. `ThreadLocal` 实例不再被强引用；
+2. 线程持续存活，导致 `ThreadLocalMap` 长期存在。
+
+虽然 `ThreadLocalMap` 在 `get()`, `set()` 和 `remove()` 操作时会尝试清理 key 为 null 的 entry，但这种清理机制是被动的，并不完全可靠。
+
+**如何避免内存泄漏的发生？**
+
+1. 在使用完 `ThreadLocal` 后，务必调用 `remove()` 方法。 这是最安全和最推荐的做法。 `remove()` 方法会从 `ThreadLocalMap` 中显式地移除对应的 entry，彻底解决内存泄漏的风险。 即使将 `ThreadLocal` 定义为 `static final`，也强烈建议在每次使用后调用 `remove()`。
+2. 在线程池等线程复用的场景下，使用 `try-finally` 块可以确保即使发生异常，`remove()` 方法也一定会被执行。
+
+#### [为什么 Entry 的 key 要设计为弱引用？](https://javaguide.cn/java/concurrent/java-concurrent-questions-03.html#为什么-entry-的-key-要设计为弱引用)
+
+这是一个经典的面试追问。很多同学知道 `ThreadLocalMap` 的 key 是弱引用，但不清楚**为什么要这样设计**，以及如果换成强引用会怎样。
+
+我们先来看完整的引用链路。当一个线程使用 `ThreadLocal` 时，涉及以下引用关系：
+
+
+
+```
+强引用（栈/静态变量）──→ ThreadLocal 实例
+                              ↑
+Thread ──→ ThreadLocalMap ──→ Entry ─── key（WeakReference）──┘
+                              │
+                              └─── value（强引用）──→ 实际存储的对象
+```
+
+理解了这条引用链路，我们来对比两种设计方案：
+
+**假设 key 使用强引用（实际没有采用）：**
+
+当业务代码中的 `ThreadLocal` 引用被置为 `null`（例如方法执行结束、对象被回收），此时虽然业务代码已经不再需要这个 `ThreadLocal`，但由于 `ThreadLocalMap` 的 Entry 对 key 持有**强引用**，`ThreadLocal` 实例仍然无法被 GC 回收。只要线程不终止，这个 `ThreadLocal` 和它对应的 value 都会一直存在于内存中，造成 key 和 value **都无法回收**的内存泄漏。
+
+**key 使用弱引用（实际采用的方案）：**
+
+当业务代码中的 `ThreadLocal` 引用被置为 `null` 后，由于 Entry 的 key 是弱引用，`ThreadLocal` 实例在下次 GC 时会被回收，key 变为 `null`。此时虽然 value 仍然存在（强引用），但 `ThreadLocalMap` 在执行 `get()`、`set()`、`remove()` 等操作时，会主动探测并清理这些 key 为 `null` 的 "stale entry"（过期条目），从而释放 value 对象。
+
+也就是说，**弱引用的设计是一种“兜底”防御机制**——即便开发者忘记调用 `remove()`，JVM 的 GC 配合 `ThreadLocalMap` 的自清理逻辑，仍然有机会回收泄漏的数据。而如果使用强引用，一旦忘记 `remove()`，就完全没有任何补救机会了。
+
+> 需要注意的是，这种自清理机制是**被动触发**的（只在 `get`/`set`/`remove` 操作时顺便清理），并不能保证所有过期条目都被及时清理。因此，**弱引用只是降低了内存泄漏的风险，并没有彻底消除它**，手动调用 `remove()` 仍然是必须的。
+
+> Thread是不是同时被强引用和弱引用了？
+
+#### ThreadLocal结构框架
+
+```text
+                  ┌─────────────────────┐
+   TL (static 强引用) │  ThreadLocal 实例    │
+        ────────────→│  (key)              │
+                    └─────────────────────┘
+                              ↑
+                              │ 弱引用
+                    ┌─────────────────────┐
+                    │  Entry              │
+                    │  value ─────────────┼──强引用──→ value 对象
+                    └─────────────────────┘
+```
+
+- **ThreadLocal 实例**：被 `TL`（强）+ `Entry`（弱）同时指着 → **你问的"同时被强弱引用"就是这个**
+- **value 对象**：只被 `Entry.value` 强引用
+
+#### 是不是同时被弱引用和强引用？
+
+要看你说的是哪个对象。
+
+**1. ThreadLocal 实例（key）**
+
+它通常被**两层引用**同时指着：
+
+java
+
+```java
+private static final ThreadLocal<User> TL = new ThreadLocal<>();
+//      ↑ 强引用                              ↑ 这个实例
+```
+
+- `TL` 这个 static 字段 → **强引用** ThreadLocal 实例
+- `Entry`（弱引用） → **弱引用**同一个 ThreadLocal 实例
+
+所以 **ThreadLocal 实例确实同时被强引用（TL 变量）和弱引用（Entry）指着**。这就是你说的那种情况。
+
+**只要 `TL` 这个强引用还在，ThreadLocal 实例就不会被回收**，即使 GC 发生，弱引用也不生效（因为还有强引用兜着）。
