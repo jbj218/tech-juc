@@ -73,6 +73,40 @@ synchronized (lock) {
 
 所以不是“到点释放锁”的问题，而是 `sleep` 压根就不放锁，`wait` 则是主动放锁。两者的设计目的完全不同：`sleep` 只是延时，`wait` 是线程间协作。
 
+## 6.Synchronized和Lock的区别
+
+1、Synchronized 内置的Java关键字， Lock 是一个Java类
+
+2、Synchronized 无法判断获取锁的状态，Lock 可以判断是否获取到了锁
+
+3、Synchronized 会自动释放锁，lock 必须要手动释放锁！如果不释放锁，**死锁**
+
+4、Synchronized 线程 1（获得锁，阻塞）、线程2（等待，傻傻的等）；Lock锁就不一定会等待下
+
+去；
+
+5、Synchronized 可重入锁，不可以中断的，非公平；Lock ，可重入锁，可以 判断锁，非公平（可以
+
+自己设置）；
+
+6、Synchronized 适合锁少量的代码同步问题，Lock 适合锁大量的同步代码！
+
+
+
+==本人困惑的区别解惑==
+
+> synchronized锁可以通过锁的是类、静态方法、实例方法、字段、代码块等来判断是否锁的是同一资源，lock锁好像锁的都是代码片段，那我怎么保证锁的是同一资源来防止并发呢？比如lock锁的代码块中有一个静态方法，那他算锁的是当下对象还是那个唯一类对象呢
+
+### 核心认知：锁的本质是“锁对象”，而不是“锁代码”
+
+无论是 `synchronized` 还是 `Lock`，**代码本身是没法被“锁住”的**。代码只是指令，多线程可以同时执行同一段代码。
+我们真正锁住的，是**内存中的某个对象（Object）**。
+
+- **`synchronized` 的语法（锁实例、锁类、锁方法）**，本质上都是 JVM 帮你==隐式地指定了“锁对象”==（即 Monitor 关联的对象）。
+- **`Lock` 的用法**，则是要求你**显式地**创建一个对象（通常是一个 `Lock` 的实现类，比如 `ReentrantLock`），把它的引用当作“锁对象”来用。
+
+也就是说Synchronized锁的对象是**通过锁的位置来锚定某个对象作为争抢资源**。Lock锁是**自己创建一个锁资源用于争抢**，多线程抢的都是那个自己申请的Lock对象。
+
 ## 7. 传统的生产者消费者问题
 
 > 为什么使用 if 判断会导致虚假唤醒问题，需要将 `if` 改为 `while`，不是有 synchronized 保证并发吗？
@@ -219,6 +253,71 @@ class Data{ // 数字 资源类
 ```
 
 差别就在**多了一条 `goto`（回跳指令）**。`while` 编译出来的字节码在 `wait()` 之后有一个**无条件跳转，指回条件判断处**；而 `if` 编译出来后，`wait()` 的下一句就是 `number++`。
+
+## 8.Lock版生产者消费者问题
+
+## 15.异步回调
+
+### 前置知识：线程中断
+
+==线程中断只是信号，不是结果==
+
+> future接口中的cancel方法中传入true 和false的意义何在呢？如果填入false对于正在执行的线程不会中断。那这个cancel的意义何在呢？
+
+关键在于：**`cancel` 的核心语义是"取消任务的执行权"，而不是"杀死线程"**。`mayInterruptIfRunning` 参数控制的是"取消时要不要顺带发一个中断信号"，这两件事是分开的。
+
+### 先看 `cancel` 到底做了什么
+
+以 `FutureTask` 的实现为例，`cancel(true)` 和 `cancel(false)` 的共同点远大于差异：
+
+java
+
+```java
+public boolean cancel(boolean mayInterruptIfRunning) {
+    // 1. 状态机 CAS：NEW -> CANCELLED（false）或 NEW -> INTERRUPTING（true）
+    if (!(state == NEW &&
+          UNSAFE.compareAndSwapInt(this, stateOffset, NEW,
+              mayInterruptIfRunning ? INTERRUPTING : CANCELLED)))
+        return false;   // 已经完成/已取消，取消失败
+
+    try {
+        if (mayInterruptIfRunning) {
+            try {
+                Thread t = runner;
+                if (t != null)
+                    t.interrupt();   // 2. 唯一区别：是否发中断
+            } finally {
+                state = INTERRUPTED;
+            }
+        }
+    } finally {
+        runner = null;
+        state = COMPLETING;  // 收尾
+    }
+    return true;
+}
+```
+
+
+
+两者**共同**的效果：
+
+1. **任务还没开始跑** → 状态直接置为 CANCELLED，之后 `run()` 里 `if (state != NEW) return;` 直接跳过，任务**永远不会执行**。
+2. **任务正在跑，但阻塞在 `get()` 上** → 所有 `get()` 调用者立刻抛 `CancellationException`，不用等到任务跑完。
+3. **`isCancelled()` 返回 true**，`isDone()` 返回 true。
+4. 如果任务已经完成或已经取消，`cancel` 返回 `false`。
+
+**唯一区别**：==`true` 会对执行线程 `interrupt()`，`false` 不会。==
+
+### 那 `cancel(false)` 的意义在哪？
+
+#### 1. 让等待者立刻解脱，而不是等任务跑完
+
+想象一个任务要跑 10 分钟，另一个线程阻塞在 `future.get()` 上。`cancel(false)` 让这个 `get()` 立刻抛 `CancellationException` 返回。如果不用 `cancel` 而只是"不管它"，`get()` 还得傻等 10 分钟。这是 `cancel(false)` 最实用的场景。
+
+#### 2. 任务还没启动时，阻止它启动
+
+线程池里任务在队列里排队，`cancel(false)` 能让它被丢弃（前提是没被 worker 取走）。这是纯粹的"取消执行权"。
 
 ## 16. CyclicBarrier
 
@@ -884,7 +983,7 @@ public class ThreadLocalExample {
 
 我们先来看完整的引用链路。当一个线程使用 `ThreadLocal` 时，涉及以下引用关系：
 
-
+Thread可用通过`Thread.currentThread()`获取到`ThreadLocalMap`的`key`，再通过`getMap(Thread t)` 可以访问到该线程的 `ThreadLocalMap` 对象。
 
 ```
 强引用（栈/静态变量）──→ ThreadLocal 实例
@@ -949,3 +1048,132 @@ private static final ThreadLocal<User> TL = new ThreadLocal<>();
 所以 **ThreadLocal 实例确实同时被强引用（TL 变量）和弱引用（Entry）指着**。这就是你说的那种情况。
 
 **只要 `TL` 这个强引用还在，ThreadLocal 实例就不会被回收**，即使 GC 发生，弱引用也不生效（因为还有强引用兜着）。
+
+### ThreadLocal异步线程（跨线程使用）
+
+![image-20261014111207692](C:\Users\沨烨\AppData\Roaming\Typora\typora-user-images\image-20261014111207692.png)
+
+## 2、AQS
+
+### AQS是什么？
+
+![image-20261014165558965](C:\Users\沨烨\AppData\Roaming\Typora\typora-user-images\image-20261014165558965.png)
+
+### AQS的工作流程
+
+通过对State变量进行**cas**操作，成功了加锁，失败了放入双向队列等待加锁。
+
+![image-20261014165906996](C:\Users\沨烨\AppData\Roaming\Typora\typora-user-images\image-20261014165906996.png)
+
+**tip:**公平锁、非公平锁的实现思路就是就是取决于双向队列以什么规则来放出等待的线程，排队释放就是公平锁，**新来的线程不需要排队，可以直接去 CAS 抢锁，抢不到再去排队就是非公平锁。**
+
+```text
+公平锁：
+  新线程来 → 先检查队列有没有人在等
+            有 → 乖乖排队，不抢
+            没有 → 才去抢
+
+非公平锁：
+  新线程来 → 直接 CAS 抢，不管队列有没有人
+            抢到 → 拿走
+            抢不到 → 再排队
+```
+
+### 利用AQS实现自定义锁
+
+![image-20261014170719442](C:\Users\沨烨\AppData\Roaming\Typora\typora-user-images\image-20261014170719442.png)
+
+### 手写简单独占锁
+
+~~~java
+public class SimpleLock {
+    private static class Sync extends AbstractQueuedSynchronizer {
+        @Override
+        protected boolean tryAcquire(int acquires) {
+            if (compareAndSetState(0, 1)) {
+                setExclusiveOwnerThread(Thread.currentThread());
+                return true;
+            }
+            return false;
+        }
+
+        @Override
+        protected boolean tryRelease(int releases) {
+            if (getState() == 0) throw new IllegalMonitorStateException();
+            setExclusiveOwnerThread(null);
+            setState(0);
+            return true;
+        }
+
+        @Override
+        protected boolean isHeldExclusively() {
+            return getState() == 1;
+        }
+    }
+
+    private final Sync sync = new Sync();
+
+    public void lock() {
+        sync.acquire(1);
+    }
+
+    public void unlock() {
+        sync.release(1);
+    }
+}
+
+~~~
+
+## 3、CurrentHashMap
+
+### 三者对比
+
+| 特性      | HashMap | Hashtable         | ConcurrentHashMap |
+| --------- | ------- | ----------------- | ----------------- |
+| 线程安全  | 否      | 是                | 是                |
+| 锁机制    | 无      | 全局 synchronized | CAS + 桶级锁      |
+| null 键值 | 允许    | 不允许            | 不允许            |
+| 性能      | 最高    | 最低              | 高并发下最优      |
+| 推荐场景  | 单线程  | 不推荐使用        | 多线程            |
+
+### HashMap 多线程会出什么问题？
+
+回答：最典型的就是 JDK 1.7 的死循环问题。扩容时如果两个线程同时触发 rehash，链表迁移可能形成环，后续 get 操作会无限循环，CPU 直接打满。JDK 1.8 改成尾插法解决了成环问题，但多线程同时 put 还是会丢数据，两个线程算到同一个桶位置，后写的直接覆盖先写的。
+
+### CurrentHashMap 1.8实现过程
+
+### 1.8 细粒度锁实现细节
+
+1.8 做了更细粒度的锁控制，可以理解为数组的每个位置都是一把锁，扩容了锁也会变多，并发度也会增加。
+
+![20220219203455.png](https://pic.code-nav.cn/mianshiya/question_picture/1783397053004488705/20220219203455_mianshiya.webp)
+
+思想转变就是把粒度更加细化。不分段了，直接把 Node 数组的每个节点分别上一把锁，这样并发度不就更高了吗？
+
+1.8 也不借助 ReentrantLock 了，直接用 synchronized，这也侧面证明都到 1.8 了，synchronized 优化后的速度已经不下于 ReentrantLock。
+
+**具体实现思路**：当塞入一个值的时候，先计算 key 的 hash 后的下标，如果**计算到的下标还未有 Node，就通过 CAS 塞入新的 Node**。**如果已经有 Node 则通过 synchronized 将这个 Node 上锁**，这样别的线程就无法访问这个 Node 及其之后的所有节点。然后判断 key 是否相等，相等则是替换 value，反之则是新增一个 Node，这个操作和 HashMap 一样。
+
+
+
+> 对于这个过程**”如果已经有 Node 则通过 synchronized 将这个 Node 上锁“**。有 node 时为啥不也 CAS 呢？
+
+**因为在发生哈希冲突、形成链表或红黑树后，要做的事情太复杂了，CAS 这种“轻量级、只比较一次、只能改一个值”的原子操作，根本无力应对。**
+
+具体举例： 结构变更太复杂，CAS 做不到
+
+- **空桶时（无 Node）**：你要做的事很简单，就是把数组的这个位置从 `null` 变成 `new Node(key, value)`。这其实就是**把一个引用指向新对象**。CAS 刚好就是干这个的（通过硬件指令 `cmpxchg` 比较并交换）。
+- **有 Node 时（发生冲突）**：你要做的事情包括：
+  - 如果当前节点是链表：你需要沿着链表遍历，找到相同的 key 就替换 value；如果没找到，就要把新节点挂到链表的**末尾**（1.8 是尾插法）。这涉及到了指针的修改和链表的遍历。
+  - 如果当前节点是红黑树：你需要执行红黑树的插入和自平衡（左旋、右旋、变色），这涉及到非常多的指针操作。
+  - 如果链表长度达到了阈值（8）：你还要把链表**转成红黑树**，或者触发了扩容，还要协助**扩容（helpTransfer）**。
+
+**CAS 的基本要求是“无锁但只做简单修改”（比如修改一个 `int` 或一个 `Node` 的引用）**。如果要处理复杂的链表遍历、红黑树旋转，用 CAS 根本没法保证原子性，总不能遍历一次链表就加一堆 CAS 校验吧？那样代码极其复杂且容易出错。
+
+## Future
+
+### 线程中断
+
+### Future基础应用
+
+### CompletableFuture

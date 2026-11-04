@@ -1700,7 +1700,7 @@ DiscardPolicy in ThreadPoolExecutor (java.util.concurrent)    < 1.8 > (rt.jar)
  * new ThreadPoolExecutor.AbortPolicy() // 银行满了，还有人进来，不处理这个人的，抛出异 常
  * new ThreadPoolExecutor.CallerRunsPolicy() // 哪来的去哪里！
  * new ThreadPoolExecutor.DiscardPolicy() //队列满了，丢掉任务，不会抛出异常！
- * new ThreadPoolExecutor.DiscardOldestPolicy() //队列满了，尝试去和最早的竞争，也不会 抛出异常！
+ * new ThreadPoolExecutor.DiscardOldestPolicy() //队列满了，直接丢掉最早的任务，执行最新的
  */
 ```
 ### 小结和拓展
@@ -2143,7 +2143,7 @@ public class Test {
 ```
 ## 15、异步回调
 Future 设计的初衷： 对将来的某个事件的结果进行建模
-```text
+```javascript
 java.util.concurrent
 
 Class CompletableFuture<T>
@@ -2156,6 +2156,7 @@ CompletionStage <T>, Future <T>
 ```
 
 `CompletableFuture<T>` 继承自 `java.lang.Object`，实现了 `CompletionStage<T>` 与 `Future<T>` 两个接口，是异步回调编程的核心类。
+
 ```java
 package com.kuang.future;
 import java.util.concurrent.CompletableFuture;
@@ -2224,6 +2225,7 @@ JMM ： Java内存模型，不存在的东西，概念！约定！
 ![09-JMM工作内存与主存](狂神说JUC笔记.assets/09-JMM工作内存与主存.png)
 
 > 图中标注的 `lock`、`unlock` 以及 `load`、`read`、`write`、`store` 均属于 JMM 的 8 种内存交互操作。
+
 ![10-JMM八种内存操作](狂神说JUC笔记.assets/10-JMM八种内存操作.png)
 
 **问题：线程B修改了值，但是线程A不能及时可见。**
