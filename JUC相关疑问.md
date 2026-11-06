@@ -1176,4 +1176,345 @@ public class SimpleLock {
 
 ### Future基础应用
 
+
+
 ### CompletableFuture
+
+#### 为什么需要 CompletableFuture？
+
+在 Java 8 之前，我们用 Future 处理异步任务，但它有明显缺陷：
+
+- 无法直接对多个 Future 进行链式组合
+- 不能优雅地处理异常
+- 缺乏回调机制，需要阻塞等待结果
+
+CompletableFuture 实现了 Future 和 CompletionStage 接口，弥补了这些不足，让异步编程更灵活。
+
+#### 编排任务关系
+
+主要有串行关系和并行，我们分别来看下:
+
+##### **串行关系**：当一个任务依赖上一个任务的结果时。
+
+- `thenApply()`: 获取上一步结果，**处理并返回一个新结果**。这是最常用的串行方法。 (例如：查询到用户信息后，提取用户名)。参数是 V Function<T,V>，一进一出
+- `thenAccept()`: 获取上一步结果，**纯消费，无返回值**。 (例如：查询到用户信息后，打印日志)。参数是void Comsumer<T>，只进不出
+- `thenRun()`: **不关心上一步结果**，只要上一步执行完，就开始执行。 (例如：任务A完成后，触发一个清理任务)
+- `thenCompose()`: 当下一步操作本身也是一个异步任务时使用，它可以将两层 `CompletableFuture<CompletableFuture<T>>` ==扁平化==为一层 `CompletableFuture<T>`，避免层层嵌套。
+
+**thenCompose()应用：**
+
+~~~java
+package com.kuang.future;
+
+import java.util.concurrent.*;
+/*
+* compose:将两个CompletableFuture组合成一个CompletableFuture，当两个CompletableFuture都执行完毕时，将结果进行组合
+* 需求：
+// 任务A 实现返回字符串"2"
+// 任务B 基于任务A 的结果，转换为数字2
+// 任务C 基于任务B 的结果，计算 2*10 的结果
+// 关键点：任务A、B、C 都是异步任务；*/
+//这个也是多任务，但这个多任务在业务逻辑上是串行的，下一个任务必须拿到上一个任务才能执行。和后面的并行多任务编排还是有区别
+
+public class CompletableFutureUse2 {
+    private static final ThreadPoolExecutor THREAD_POOL_EXECUTOR = new ThreadPoolExecutor(5,
+            10,
+            30L,
+            TimeUnit.SECONDS,
+            new LinkedBlockingDeque<>(20),
+            Executors.defaultThreadFactory(),
+            new ThreadPoolExecutor.AbortPolicy());
+
+    public static CompletableFuture<String> methodA() {
+        return CompletableFuture.supplyAsync(() -> "2", THREAD_POOL_EXECUTOR);
+    }
+
+    public static CompletableFuture<Integer> methodB(String str) {
+        return CompletableFuture.supplyAsync(() -> {
+            return Integer.parseInt(str);
+        }, THREAD_POOL_EXECUTOR);
+    }
+
+    public static CompletableFuture<Integer> methodC(Integer i) {
+        return CompletableFuture.supplyAsync(() -> {
+            return i * 10;
+        }, THREAD_POOL_EXECUTOR);
+    }
+
+    public static void main(String[] args) {
+        //方式一 逻辑签到十分复杂
+       methodA().thenApply(aResult->methodB(aResult))
+               .thenApply(bFuture->bFuture.
+                       thenApply(bResult->methodC(bResult)).
+                       thenApply(cFuture->cFuture.
+                               thenAccept(cResult-> System.out.println(cResult))));
+
+       //方式二 compose，自动展开嵌套逻辑直接获取结果传入下一个。
+        methodA().thenCompose(aResult->methodB(aResult)).
+                thenCompose(bResult->methodC(bResult)).
+                thenAccept(cResult-> System.out.println(cResult));
+    }
+}
+
+~~~
+
+##### **并行关系**：当多个任务可以同时执行时，又分为 AND 和 OR。
+
+**AND 组合**: 等待**所有**任务都完成。
+
+- `thenCombine()`: 组合**两个**任务，当它们都完成后，可以将两个任务的结果整合起来。
+- `allOf()`: 组合**任意多个**任务，等待它们全部完成。但它的返回值是 `CompletableFuture<Void>`，需要额外处理来获取所有任务的结果。
+
+**OR 组合**: 等待**任意一个**任务完成。
+
+- `anyOf()`: 组合任意多个任务，只要其中一个完成了，它就会进入下一步。
+
+多任务并行应用
+
+~~~java
+package com.kuang.future;
+
+import java.util.Random;
+import java.util.concurrent.*;
+
+public class CompletableFuture4 {
+    private static final ThreadPoolExecutor THREAD_POOL_EXECUTOR = new ThreadPoolExecutor(5,
+            10,
+            30L,
+            TimeUnit.SECONDS,
+            new LinkedBlockingDeque<>(20),
+            Executors.defaultThreadFactory(),
+            new ThreadPoolExecutor.AbortPolicy());
+    /*All of +join || anyOf */
+
+    public static void main(String[] args) {
+        CompletableFuture<Integer> taskA = CompletableFuture.supplyAsync(() -> {
+            return new Random().nextInt(100);
+        }, THREAD_POOL_EXECUTOR);
+        taskA.thenAccept(result -> System.out.println("任务A结果：" + result));
+
+        CompletableFuture<Integer> taskB = CompletableFuture.supplyAsync(() -> {
+            return new Random().nextInt(100);
+        }, THREAD_POOL_EXECUTOR);
+        taskB.thenAccept(result -> System.out.println("任务B结果：" + result));
+
+        CompletableFuture<Integer> taskC = CompletableFuture.supplyAsync(() -> {
+            return new Random().nextInt(100);
+        }, THREAD_POOL_EXECUTOR);
+        taskC.thenAccept(result -> System.out.println("任务C结果：" + result));
+        //all of, 等待所有任务完成再执行，不直接返回结果，需要通过join手动获取后再定义自己的操作
+        CompletableFuture<Void> taskD = CompletableFuture.allOf(taskA, taskB, taskC);
+        taskD.thenApply(result->{
+            //直接返回result,结果是null;
+            //result result;
+            return taskA.join() + taskB.join() + taskC.join();
+
+        }).thenAccept(result -> System.out.println("任务D结果：" + result));
+
+        //anyof 等待所有任务，只要有一个任务执行完，就执行下一步
+        CompletableFuture<Object> taskE = CompletableFuture.anyOf(taskA, taskB, taskC);
+        taskE.thenAccept(result -> System.out.println("任务E结果：" + result));
+        THREAD_POOL_EXECUTOR.shutdown();
+    }
+
+}
+
+~~~
+
+> 用allof 和anyof时并没有指定线程池，它使用的是那个线程呢？有自定义的线程池吗？
+
+`CompletableFuture.allOf(...)` 和 `anyOf(...)` 都是**静态方法**。
+当你调用它们时，它们会在**当前调用它们的线程**（比如 main 线程）中瞬间执行完毕。
+
+它们做的事情仅仅是：**把你传进去的那几个任务（taskA、taskB、taskC）打包成一个“依赖组”**。
+它们**不负责执行**任务，只负责**监控**任务的状态（全完成？还是任意一个完成？）。
+因此，`allOf` 和 `anyOf` 自身**没有线程池，也不需要线程池**。
+
+
+
+##### 最后还需要有收尾与异常处理:
+
+1、语法
+
+- `whenComplete()`: 无论成功还是失败都会执行，可以获取结果或异常，但不能改变返回值。
+- `exceptionally()`: 类似于 `try-catch` 中的 `catch` 块，当上游任务抛出异常时，它可以**捕获异常**并返回一个默认值，从而让流程继续下去。
+- `handle()`: 无论成功还是失败都会执行，并且可以**处理结果和异常**，然后返回一个新结果。是 `whenComplete` 和 `exceptionally` 的结合体。
+
+exceptionally使用：处理异常时需要返回一个默认值；这个默认值可以流向下游处理
+
+~~~java
+ public static void main(String[] args)  {
+        CompletableFuture<Void> taskA = CompletableFuture.supplyAsync(() -> {
+                    int i = new Random().nextInt(100);
+
+                    for (int j = 0; j < 100; j++) {
+                        i++;
+                    }
+                    i=i/0;//异常
+                    return i;
+                }, THREAD_POOL_EXECUTOR)
+            //捕获异常
+                .exceptionally(e->{
+                    System.out.println("任务A异常：" + e.getMessage());
+                    return 1;//返回默认值
+                }).thenAccept(result -> System.out.println("任务A结果：" + result));
+
+        THREAD_POOL_EXECUTOR.shutdown();
+    }
+~~~
+
+![image-20261106163502965](C:\Users\沨烨\AppData\Roaming\Typora\typora-user-images\image-20261106163502965.png)
+
+handle使用
+
+~~~java
+CompletableFuture<Integer> taskB = CompletableFuture.supplyAsync(() -> {
+            int i = new Random().nextInt(100);
+
+            for (int j = 0; j < 100; j++) {
+                i++;
+            }
+            i = i / 0;//异常
+            return i;
+        }, THREAD_POOL_EXECUTOR).handle((result, e) -> {
+            if (e != null) {
+                System.out.println("任务B异常：" + e.getMessage());
+                return 1;//返回默认值
+            }
+            System.out.println("打印日志....result:" + result);
+            return result;
+        }).thenApply(result -> {
+            System.out.println("任务B结果：" + result);
+            return result;
+        });
+~~~
+
+
+
+![image-20261106165206128](C:\Users\沨烨\AppData\Roaming\Typora\typora-user-images\image-20261106165206128.png)
+
+
+
+**所以日常是`handle`和`exceptionally`结合,`handle`在前面捕获异常记录日志将异常抛出，`exceptionally`在后面接着专门用来处理异常。**
+
+~~~java
+        CompletableFuture<Integer> taskC = CompletableFuture.supplyAsync(() -> {
+                    int i = new Random().nextInt(100);
+
+                    for (int j = 0; j < 100; j++) {
+                        i++;
+                    }
+                    i = i / 0;//异常
+                    return i;
+                }, THREAD_POOL_EXECUTOR)
+                //第一层捕获异常不处理向外抛出，记录日志
+                .handle((result, e) -> {
+                    if (e != null) {
+                        System.out.println("任务C异常：" + e.getMessage());
+                        throw new RuntimeException(e);
+                    }
+                    System.out.println("打印日志....result:" + result);
+                    return result;
+                //第二层捕获异常处理
+                }).exceptionally(e -> {
+                    System.out.println("任务C结果：" + e.getMessage());
+                    return 0;
+                //第三层业务处理
+                }).thenApply(result -> {
+                    System.out.println("任务C结果：" + result);
+                    return result;
+                });
+~~~
+
+
+
+![image-20261105223136323](C:\Users\沨烨\AppData\Roaming\Typora\typora-user-images\image-20261105223136323.png)
+
+2、异常规则
+
+`CompletableFuture`的异常中断原则：
+
+ `CompletableFuture` 最基础的级联原则：**一旦某一步出错，整条链后续的“正常逻辑”全部被跳过（短路），直到遇到异常处理节点。**
+
+~~~java
+        CompletableFuture<Integer> taskA = CompletableFuture.supplyAsync(() -> {
+            return new Random().nextInt(100);
+        }, THREAD_POOL_EXECUTOR);
+        taskA.thenAccept(result -> System.out.println("任务A结果：" + result));
+
+        CompletableFuture<Integer> taskB = CompletableFuture.supplyAsync(() -> {
+            throw new RuntimeException("taskB exception");
+        }, THREAD_POOL_EXECUTOR);
+        taskB.thenAccept(result -> System.out.println("任务B结果：" + result));
+
+        CompletableFuture<Void> taskC = CompletableFuture.allOf(taskA, taskB);
+        taskC.thenApply(result -> {
+            return taskA.join() + taskB.join();
+        }).thenAccept(result -> System.out.println("任务C结果：" + result));
+        THREAD_POOL_EXECUTOR.shutdown();
+
+任务A结果：6
+~~~
+
+这里只会有异常前任务A的结果，任务B异常，后面的流程跳过且不抛异常。
+
+3、为啥要做异常处理？
+
+**默认情况下，异步任务抛出异常，如果你不主动处理，它表面上看起来就像“什么都没发生”一样（静默失败）。**
+
+如果你调用 `join()` 或 `get()` 去拿结果，异常就会被抛出来。
+
+- `get()` 会抛出受检异常 `ExecutionException`（内部包裹了真实异常）。
+- `join()` 会抛出非受检异常 `CompletionException`。
+
+但如果你连 `get/join` 都没调，异常就丢失了。
+
+就算用了`get/join`,此时获取的异常时间和真实异常发生的时间也是不同的，如果需要确切的时间做日志，这是不可接受的。
+
+~~~java
+package com.kuang.future;
+
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Random;
+import java.util.concurrent.*;
+
+public class CompletableFutureExeception {
+    private static final ThreadPoolExecutor THREAD_POOL_EXECUTOR = new ThreadPoolExecutor(5,
+            10,
+            30L,
+            TimeUnit.SECONDS,
+            new LinkedBlockingDeque<>(20),
+            Executors.defaultThreadFactory(),
+            new ThreadPoolExecutor.AbortPolicy());
+
+    public static void main(String[] args)  {
+        CompletableFuture<Void> taskA = CompletableFuture.runAsync(() -> {
+
+            System.out.println("异常发生时间："+LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+            throw new RuntimeException("taskA exception");
+        }, THREAD_POOL_EXECUTOR);
+        //模拟主线程执行耗时任务
+        try {
+            Thread.sleep(2000);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+        try {
+            System.out.println("获取异常时间："+LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+            taskA.get();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        }
+        THREAD_POOL_EXECUTOR.shutdown();
+    }
+
+
+}
+
+~~~
+
+![image-20261106162514575](C:\Users\沨烨\AppData\Roaming\Typora\typora-user-images\image-20261106162514575.png)
+
