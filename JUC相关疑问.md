@@ -431,7 +431,7 @@ Java 的设计者为了**避免这种歧义**，干脆规定：**能被内部类
 
 Java 8 之后不再强制写 `final`，但要求变量是 **effectively final**（事实上的 final）——即：
 
-> 声明后**只赋值一次，再也没改过**。
+> “事实上的不可变”在 Java 语法里的定义是：变量声明并初始化后，从头到尾绝对没有被重新赋值过。
 
 ```java
 int x = 10;
@@ -445,6 +445,32 @@ Runnable r = () -> System.out.println(x);  // ❌ 编译错误
 ```
 
 编译器会自动判断“你有没有改过”。**本质约束没变，只是省了你手写 `final`。** 所以 Java 8 不是取消了限制，而是把“显式 final”放宽成了“事实上 final”。
+
+**反例：**第一次赋值了`null`,第二次赋值了`LazySingle.getInstance()`，结果还是报错
+
+~~~java
+package com.kuang.single.my;
+
+import java.util.concurrent.ThreadPoolExecutor;
+
+public class test {
+
+    public static void main(String[] args) {
+        LazySingle instance2=null;
+        LazySingle instance3 = null;
+        new Thread(() -> {
+            instance2 = LazySingle.getInstance();
+        }).start();
+        new Thread(() -> {
+            instance3 = LazySingle.getInstance();
+        }).start();
+        System.out.println(instance2 == instance3);
+    }
+}
+
+~~~
+
+
 
 > 为什么这里没有要求事实不可变呢？也不报错。
 
