@@ -809,6 +809,8 @@ x ⊕ e = x
 
 ## 33. 彻底玩转单例模式
 
+### 饿汉式
+
 > 这个饿汉式单例，我不用它，它不也没有申请对象吗？为啥说他浪费空间呢？
 
 ```java
@@ -840,7 +842,7 @@ public class Hungry {
 
 我们来拆解一下这里的核心逻辑：
 
-### 为什么“不用它”也会申请对象？
+#### 为什么“不用它”也会申请对象？
 
 在 Java 中，**静态变量（`static`）是在类加载（Class Loading）阶段就被初始化的**，而不是在第一次调用 `getInstance()` 时。
 
@@ -860,6 +862,10 @@ public class Hungry {
 3. 把引用赋值给 `HUNGRY`。
 
 **重点在于：** 这个 `new Hungry()` 是在**类初始化**时发生的，而不是在**调用 `getInstance()`** 时发生的。所以，哪怕你只是加载了类，还没开始用它，`Hungry` 对象就已经在堆内存里建好了。
+
+### 静态内部类
+
+关于静态内部类的底层疑问以及逻辑梳理详看：https://chat.deepseek.com/share/qsbej2rbnqicmgt4b6
 
 ## 35. 原子引用解决 ABA 问题
 
@@ -1196,7 +1202,7 @@ public class SimpleLock {
 
 **CAS 的基本要求是“无锁但只做简单修改”（比如修改一个 `int` 或一个 `Node` 的引用）**。如果要处理复杂的链表遍历、红黑树旋转，用 CAS 根本没法保证原子性，总不能遍历一次链表就加一堆 CAS 校验吧？那样代码极其复杂且容易出错。
 
-## Future
+## 4、Future
 
 ### 线程中断
 
@@ -1544,3 +1550,6 @@ public class CompletableFutureExeception {
 
 ![image-20261106162514575](C:\Users\沨烨\AppData\Roaming\Typora\typora-user-images\image-20261106162514575.png)
 
+## 5、队列
+
+![java-queue-tree](https://natureshiyi-image.oss-cn-hangzhou.aliyuncs.com/img/java-queue-tree.png)
