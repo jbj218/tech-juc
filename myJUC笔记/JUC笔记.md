@@ -1552,4 +1552,231 @@ public class CompletableFutureExeception {
 
 ## 5、队列
 
+### 队列体系
+
 ![java-queue-tree](https://natureshiyi-image.oss-cn-hangzhou.aliyuncs.com/img/java-queue-tree.png)
+
+#### 一、继承关系
+
+`java.util.Queue` 继承自 `Collection`，往下可以分成三类：
+
+- **普通队列**：`PriorityQueue`、`ConcurrentLinkedQueue`、`ConcurrentLinkedDeque`
+- **双端队列 `Deque`**：`ArrayDeque`、`LinkedList`、`LinkedBlockingDeque`
+- **阻塞队列 `BlockingQueue`**：`ArrayBlockingQueue`、`LinkedBlockingQueue`、`PriorityBlockingQueue`、`DelayQueue`、`SynchronousQueue`、`LinkedTransferQueue`
+
+> 记忆口诀：类名带 `Blocking` / `Concurrent` 的是线程安全的；`PriorityQueue`、`ArrayDeque`、`LinkedList` 这些普通实现都不是。
+
+#### 二、速查表
+
+##### 重点队列
+
+##### ArrayBlockingQueue——有界数组阻塞队列
+
+最经典的阻塞队列：容量固定、实现直白，读懂它就理解了阻塞队列的整套机制。
+
+- 底层是 Object[] 循环数组，容量在构造时确定，之后不能扩容。
+- 只有一把 ReentrantLock，靠 notEmpty / notFull 两个 Condition 完成阻塞与唤醒。
+- 构造参数 fair 控制公平性：公平模式按 FIFO 唤醒、吞吐略低，默认非公平。
+- 不允许 null；put / take 会阻塞，offer / poll 支持超时版本。
+- 典型场景：ThreadPoolExecutor 配上它做有界队列实现背压，任务堆满后触发拒绝策略，避免 OOM。
+
+##### LinkedBlockingQueue——链表阻塞队列
+
+Executors 的默认任务队列，吞吐高，但默认容量这件事坑过很多人。
+
+- 底层是单向链表 Node，默认容量 Integer.MAX_VALUE，不传容量就近似无界。
+- putLock / takeLock 两把锁分离，入队和出队可以并行，吞吐通常高于 ArrayBlockingQueue。
+- 元素计数用 AtomicInteger，size() 是 O(1)。
+- 最大的坑：默认无界，生产速度长期大于消费速度会撑爆内存，务必显式指定容量。
+- 典型场景：newFixedThreadPool、newSingleThreadExecutor 的默认队列，以及高吞吐生产消费。
+
+##### SynchronousQueue——零容量手递手队列
+
+容量为 0，不存元素，只负责把生产者直接匹配给消费者。
+
+- put 必须等到有线程 take，take 也必须等到有线程 put；没有消费者时 put 一直阻塞。
+- 公平模式基于 TransferQueue（FIFO），非公平模式基于 TransferStack（LIFO），默认非公平。
+- offer() 不做等待、立即返回 false，适合“要么立刻被接走，要么失败”的语义。
+- 典型场景：newCachedThreadPool——任务直接交给空闲线程，没有空闲线程就新建线程。
+
+##### PriorityQueue——二叉堆优先级队列
+
+非线程安全的优先级队列，算法题里的常客。
+
+- 用 Object[] 数组维护二叉小顶堆，默认容量 11，满了自动扩容，逻辑上无界。
+- 元素要么实现 Comparable，要么构造时传入 Comparator；不允许 null，出队顺序不保证稳定。
+- offer / poll 是 O(log n)，peek 是 O(1)。
+- 典型场景：优先级任务、Top-K、Dijkstra；并发环境改用 PriorityBlockingQueue。
+
+##### DelayQueue——延迟队列
+
+只有“到期”的元素才能被取走，是实现定时与超时功能的基础设施。
+
+- 元素必须实现 Delayed 接口：getDelay(TimeUnit) 返回剩余延迟，compareTo 决定先后。
+- 内部用 PriorityQueue 按到期时间排序，再配合 ReentrantLock + Condition 等待。
+- 采用 leader/follower 模式，只让一个线程做定时等待，避免消费者集体空转。
+- 典型场景：订单超时关闭、缓存过期清理、定时任务；ScheduledThreadPoolExecutor 内部的 DelayedWorkQueue 是同类实现。
+
+##### ConcurrentLinkedQueue——CAS 无锁队列
+
+基于 CAS 的非阻塞队列，线程不会被锁挂起，适合超高并发。
+
+- 单向链表 + CAS 更新 head / tail，入队出队都不加锁。
+- size() 需要遍历链表，O(n) 且弱一致，不要拿它做精确计数。
+- 不允许 null，没有容量上限。
+- 典型场景：高并发事件采集、日志缓冲、非阻塞生产消费链路。
+
+##### ArrayDeque——循环数组双端队列
+
+单线程下做栈或队列的首选，比 Stack 和 LinkedList 都更划算。
+
+- 循环数组 + head / tail 下标，扩容时容量翻倍。
+- 不允许 null；push / pop 当栈，offer / poll 当队列，addFirst / addLast 当双端队列。
+- 作为栈比遗留的 Stack 快，作为队列比 LinkedList 更省内存。
+- 典型场景：替代 Stack、滑动窗口、回溯、树的迭代遍历。
+
+##### 其余队列一句话
+
+- LinkedList：双向链表，同时实现 List 和 Deque，头尾操作 O(1)、随机访问 O(n)。
+- LinkedBlockingDeque：链表双端阻塞队列，两端都能 put / take。
+- PriorityBlockingQueue：线程安全的无界优先级阻塞队列，写不阻塞、读按优先级。
+- LinkedTransferQueue：transfer() 有消费者就直交，没有就入队，兼具移交与缓冲。
+- ConcurrentLinkedDeque：CAS 无锁双端队列，适合高并发双端操作。
+
+##### 线程池里的队列
+
+- newFixedThreadPool → LinkedBlockingQueue（无界，任务会一直堆积）
+- newSingleThreadExecutor → LinkedBlockingQueue
+- newCachedThreadPool → SynchronousQueue（空闲线程不够就新建，最大 Integer.MAX_VALUE）
+- newScheduledThreadPool → DelayedWorkQueue（内部类，按执行时间排序）
+- 自定义 ThreadPoolExecutor → 推荐 ArrayBlockingQueue 做有界队列，也可用 LinkedBlockingQueue、SynchronousQueue、PriorityBlockingQueue
+
+| 需求                 | 首选                    | 一句话理由                 |
+| -------------------- | ----------------------- | -------------------------- |
+| 线程池有界队列、背压 | `ArrayBlockingQueue`    | 容量固定，满了触发拒绝策略 |
+| 追求高吞吐、任务量大 | `LinkedBlockingQueue`   | 双锁分离，入队出队并行     |
+| 不排队、直接移交线程 | `SynchronousQueue`      | 零容量，put/take 直接配对  |
+| 任务有优先级         | `PriorityBlockingQueue` | 堆排序，按优先级出队       |
+| 延时、定时执行       | `DelayQueue`            | 到期才能取，天然支持定时   |
+| 高并发非阻塞         | `ConcurrentLinkedQueue` | CAS 无锁，不挂起线程       |
+| 单线程栈 / 队列      | `ArrayDeque`            | 数组实现，比 `Stack` 快    |
+
+### 常用队列实现
+
+#### 1. ArrayBlockingQueue —— 有界数组阻塞队列
+
+容量在构造时固定，只有一把 `ReentrantLock`，再加 `notEmpty` / `notFull` 两个 `Condition`；`put` / `take` 会阻塞，`offer` / `poll` 支持超时。队列满时，`offer`超时返回`false`；队列空时`poll`超时返回`null`表示获取不到新值了（因此实际使用，肯定提前判断null,防止空指针操作`null.XXX`）。
+
+```java
+BlockingQueue<Task> q = new ArrayBlockingQueue<>(100); // 有界
+
+q.put(task);                            // 满则阻塞
+q.offer(task, 1, TimeUnit.SECONDS);     // 满则最多等 1s
+Task t = q.take();                      // 空则阻塞
+Task t2 = q.poll(1, TimeUnit.SECONDS);  // 空则最多等 1s
+
+// 配线程池做背压：队列满了走拒绝策略
+ThreadPoolExecutor pool = new ThreadPoolExecutor(
+    4, 8, 60L, TimeUnit.SECONDS,
+    new ArrayBlockingQueue<>(200),
+    new ThreadPoolExecutor.CallerRunsPolicy());
+```
+
+#### 2. LinkedBlockingQueue —— Executors 默认队列
+
+链表实现，`putLock` / `takeLock` 两把锁分离，吞吐通常高于 `ArrayBlockingQueue`。**坑在默认容量**：不传就是 `Integer.MAX_VALUE`，生产快于消费时内存会一直涨。
+
+```java
+// Executors.newFixedThreadPool 用的就是它（默认无界）
+ExecutorService pool = Executors.newFixedThreadPool(4);
+
+// 业务代码建议显式指定容量
+BlockingQueue<String> q = new LinkedBlockingQueue<>(1000);
+q.put("job");
+String job = q.take();
+
+// 别用 new LinkedBlockingQueue<>()：生产快于消费会堆到 OOM
+```
+
+#### 3. SynchronousQueue —— 零容量直接移交
+
+容量为 0，不存元素：`put` 必须等到有人 `take`，`take` 也必须等到有人 `put`。`newCachedThreadPool` 内部就是它。
+
+```java
+// 容量为 0：put 必须有人 take，take 必须有人 put
+BlockingQueue<String> q = new SynchronousQueue<>();
+
+new Thread(() -> {
+    try { q.put("A"); } catch (InterruptedException e) { }
+}).start();
+
+String v = q.take();  // 与 put 配对成功，v = "A"
+
+// CachedThreadPool：来任务直接交给空闲线程，没有就新建
+ExecutorService pool = Executors.newCachedThreadPool();
+```
+
+#### 4. DelayQueue —— 延迟 / 超时任务
+
+元素必须实现 `Delayed` 接口，只有 `getDelay()` 返回非正数时才能被取走。订单超时关闭、缓存过期清理都用它。
+
+```java
+class Order implements Delayed {
+    private final long expireAt;               // 到期时间戳(ms)
+    Order(long expireAt) { this.expireAt = expireAt; }
+
+    public long getDelay(TimeUnit unit) {
+        return unit.convert(expireAt - System.currentTimeMillis(),
+                            TimeUnit.MILLISECONDS);
+    }
+    public int compareTo(Delayed o) {
+        return Long.compare(this.getDelay(TimeUnit.MILLISECONDS),
+                            o.getDelay(TimeUnit.MILLISECONDS));
+    }
+}
+
+DelayQueue<Order> dq = new DelayQueue<>();
+dq.put(new Order(System.currentTimeMillis() + 30_000));
+Order o = dq.take();   // 阻塞到最早的元素到期
+```
+
+#### 5. PriorityBlockingQueue —— 优先级任务
+
+内部还是二叉堆，只是包了锁和 `Condition`。**它是无界的，`put` 永远不会阻塞**，读取时按优先级出队。
+
+```java
+BlockingQueue<Task> q = new PriorityBlockingQueue<>(
+        11, Comparator.comparingInt(Task::priority));
+
+q.put(new Task(5));    // 无界，put 不会阻塞
+Task t = q.take();     // 每次取优先级最高的
+```
+
+#### 6. ConcurrentLinkedQueue —— 无锁高并发
+
+基于 CAS 的非阻塞队列，入队出队都不加锁。注意 `size()` 要遍历整条链表，是 `O(n)` 且弱一致的，不能拿来做容量判断。
+
+```java
+Queue<String> q = new ConcurrentLinkedQueue<>();
+
+q.offer("a");
+q.poll();          // 无锁、非阻塞，空队列返回 null
+
+// size() 要遍历链表：O(n) 且弱一致
+// 判断空别用 size() == 0，直接用 poll() == null
+```
+
+#### 7. ArrayDeque —— 单线程栈 / 队列
+
+循环数组实现，非线程安全，但单线程下比 `Stack`、`LinkedList` 都更快，当栈、当队列、当双端队列都行。
+
+```java
+Deque<Integer> stack = new ArrayDeque<>();
+stack.push(1);          // 当栈
+int top = stack.pop();
+
+Deque<Integer> queue = new ArrayDeque<>();
+queue.offer(1);         // 当队列
+queue.poll();
+queue.offerFirst(0);    // 当双端队列
+```
