@@ -1596,7 +1596,7 @@ Executors 的默认任务队列，吞吐高，但默认容量这件事坑过很�
 
 - put 必须等到有线程 take，take 也必须等到有线程 put；没有消费者时 put 一直阻塞。
 - 公平模式基于 TransferQueue（FIFO），非公平模式基于 TransferStack（LIFO），默认非公平。
-- offer() 不做等待、立即返回 false，适合“要么立刻被接走，要么失败”的语义。
+- offer() 不做等待、立即返回 false，适合“要么立刻被接走，要么失败”的语义。也可以指定等待时间
 - 典型场景：newCachedThreadPool——任务直接交给空闲线程，没有空闲线程就新建线程。
 
 ##### PriorityQueue——二叉堆优先级队列
@@ -1665,7 +1665,11 @@ Executors 的默认任务队列，吞吐高，但默认容量这件事坑过很�
 
 #### 1. ArrayBlockingQueue —— 有界数组阻塞队列
 
-容量在构造时固定，只有一把 `ReentrantLock`，再加 `notEmpty` / `notFull` 两个 `Condition`；`put` / `take` 会阻塞，`offer` / `poll` 支持超时。队列满时，`offer`超时返回`false`；队列空时`poll`超时返回`null`表示获取不到新值了（因此实际使用，肯定提前判断null,防止空指针操作`null.XXX`）。
+容量在构造时固定，只有一把 `ReentrantLock`，再加 `notEmpty` / `notFull` 两个 `Condition`；`put` / `take` 会阻塞，`offer` / `poll` 支持超时。
+
+**`offer`/`poll`特别说明**
+
+`offer`/`poll`是**非阻塞**的，不会一直等待。队列满时，`offer`超时返回`false`；队列空时`poll`超时返回`null`表示获取不到新值了（因此实际使用，肯定提前判断null,防止空指针操作`null.XXX`）。
 
 ```java
 BlockingQueue<Task> q = new ArrayBlockingQueue<>(100); // 有界
@@ -1715,6 +1719,59 @@ String v = q.take();  // 与 put 配对成功，v = "A"
 // CachedThreadPool：来任务直接交给空闲线程，没有就新建
 ExecutorService pool = Executors.newCachedThreadPool();
 ```
+
+**真正理解**
+
+**SynchronousQueue**特性决定它一定是多线程场景的
+
+这样做会一直阻塞不出结果
+
+~~~java
+package com.kuang.bq.my;
+
+import java.util.concurrent.SynchronousQueue;
+
+public class SynchronousQueueUse {
+    public static void main(String[] args) throws Exception{
+        SynchronousQueue<Integer> queue = new SynchronousQueue<>();
+            queue.put(1);
+            Integer number = queue.take();
+            System.out.println("取出了："+number);
+
+    }
+}
+
+~~~
+
+因为 `put(1)` 在**没有消费者等着取**的情况下会**一直阻塞**，你的主线程就卡死在第 8 行 `queue.put(1)`，根本走不到后面的 `take()`，所以控制台什么都不打印，程序也永远不结束。
+
+**为什么**
+
+`SynchronousQueue` 的容量是 **0**——它不是"存元素"的队列，而是"**直接手递手**"的交接点：
+
+- `put(e)` 必须等到**另一个线程**正在 `take()`，把元素**直接交给**它，`put` 才返回。
+- `take()` 必须等到**另一个线程**正在 `put(e)`，拿到元素才返回。
+
+你的代码是**单线程**：先 `put`，此时没有任何线程在 `take`，于是 `put` 无限等待；而唯一能打破等待的 `take` 又排在它后面，永远执行不到 → **死锁**。
+
+> 那按理说，queue.take();后面也没有put啊，不应该阻塞吗？可这样是能返回结果的
+
+因为**两个线程是并发的**——`put` 在子线程里，`take` 在主线程里，它们同时存在，刚好配上对。你把"代码顺序"和"执行时间"混淆了。
+
+**关键**：`put` 和 `take` 跑在不同的线程里
+
+```java
+new Thread(() -> { queue.put(1); }).start();  // ① 子线程：去 put
+Integer number = queue.take();                 // ② 主线程：去 take
+```
+
+执行时序是这样的：
+
+1. 主线程 `start()` 启动子线程，然后**立刻继续往下走**，走到 `take()` 开始等待。
+2. 子线程同时也在跑，执行 `put(1)`，发现**主线程正在 `take()` 等**，于是**直接交接**。
+3. 交接完成：`put` 返回、`take` 返回 1，主线程打印结果。
+
+所以 `take()` 后面确实没有 `put` **语句**，但 `put` **在另一个线程里同时执行着**。`SynchronousQueue` 只要求"**同一时刻有一个 put 和一个 take 配对**"，不要求它们在同一线程、按代码先后顺序出现。
 
 #### 4. DelayQueue —— 延迟 / 超时任务
 
