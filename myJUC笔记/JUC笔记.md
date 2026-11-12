@@ -1781,14 +1781,14 @@ Integer number = queue.take();                 // ② 主线程：去 take
 class Order implements Delayed {
     private final long expireAt;               // 到期时间戳(ms)
     Order(long expireAt) { this.expireAt = expireAt; }
-
+	//1.获取剩余时间
     public long getDelay(TimeUnit unit) {
         return unit.convert(expireAt - System.currentTimeMillis(),
                             TimeUnit.MILLISECONDS);
     }
+    //2.比较排序到期时间
     public int compareTo(Delayed o) {
-        return Long.compare(this.getDelay(TimeUnit.MILLISECONDS),
-                            o.getDelay(TimeUnit.MILLISECONDS));
+        return Long.compare(this.expireAt, ((Order) o).expireAt);
     }
 }
 
@@ -1796,6 +1796,62 @@ DelayQueue<Order> dq = new DelayQueue<>();
 dq.put(new Order(System.currentTimeMillis() + 30_000));
 Order o = dq.take();   // 阻塞到最早的元素到期
 ```
+
+##### `Delayed` 接口的两个方法解析
+
+`Delayed` 是 `java.util.concurrent` 包中的接口，继承自 `Comparable<Delayed>`。它用于**延迟队列**（如 `DelayQueue`）中，表示"某个元素要等到指定时间后才能被取出"。
+
+**一、`getDelay(TimeUnit unit)`**
+
+```java
+public long getDelay(TimeUnit unit) {
+    return unit.convert(expireAt - System.currentTimeMillis(),
+                        TimeUnit.MILLISECONDS);
+}
+```
+
+**干了啥：**
+
+- 计算 `到期时间戳 - 当前时间戳` = **还剩多少毫秒到期**
+- 用 `unit.convert(...)` 把毫秒换算成调用者指定的时间单位（秒、纳秒、微秒等）。**`queue.take()`内部写死了传入纳秒`(NANOSECONDS)`单位，即unit=纳秒**
+
+~~~java
+public long convert(long sourceDuration, TimeUnit sourceUnit)
+~~~
+
+两个参数含义是：
+
+| 参数             | 值                                      | 含义                           |
+| :--------------- | :-------------------------------------- | :----------------------------- |
+| `sourceDuration` | `expireAt - System.currentTimeMillis()` | **时长数值**                   |
+| `sourceUnit`     | `TimeUnit.MILLISECONDS`                 | 这个数值**是用什么单位表示的** |
+
+将数值+单位->传入的单位。
+
+**有啥用：**
+
+- `DelayQueue` 内部（`take()`/`poll()`）**反复调用**这个方法判断元素是否到期：
+  - 返回值 **> 0**：还没到期，继续等待
+  - 返回值 **≤ 0**：已到期，可以出队返回给消费者
+- 它是延迟队列判断"该不该放行"的**唯一依据**。
+
+**二、`compareTo(Delayed o)`**
+
+```java
+public int compareTo(Delayed o) {
+    return Long.compare(this.getDelay(TimeUnit.MILLISECONDS),
+                        o.getDelay(TimeUnit.MILLISECONDS));
+}
+```
+
+**干了啥：**
+
+- 比较**两个元素的剩余延迟**，谁的剩余时间短谁排前面（小的先出队）
+
+**有啥用：**
+
+- `DelayQueue` 底层是 `PriorityQueue`（小顶堆），入队/出队要维护堆序，靠的就是 `compareTo` 决定优先级。
+- 保证**最早到期的元素在堆顶**，这样 `take()` 只需检查堆顶即可知道有没有到期元素，效率高（O(log n) 维护，O(1) 看堆顶）。
 
 #### 5. PriorityBlockingQueue —— 优先级任务
 
