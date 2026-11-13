@@ -1799,7 +1799,24 @@ Order o = dq.take();   // 阻塞到最早的元素到期
 
 ##### `Delayed` 接口的两个方法解析
 
-`Delayed` 是 `java.util.concurrent` 包中的接口，继承自 `Comparable<Delayed>`。它用于**延迟队列**（如 `DelayQueue`）中，表示"某个元素要等到指定时间后才能被取出"。
+`Delayed` 是 `java.util.concurrent` 包中的接口，继承自 `Comparable<Delayed>`。它用于**延迟队列**（如 `DelayQueue`）中，表示"某个元素要等到指定时间后才能被取出"。相当于封装了一层比较接口
+
+~~~java
+public interface Delayed extends Comparable<Delayed> {
+
+    /**
+     * Returns the remaining delay associated with this object, in the
+     * given time unit.
+     *
+     * @param unit the time unit
+     * @return the remaining delay; zero or negative values indicate
+     * that the delay has already elapsed
+     */
+    long getDelay(TimeUnit unit);
+}
+~~~
+
+
 
 **一、`getDelay(TimeUnit unit)`**
 
@@ -1855,15 +1872,63 @@ public int compareTo(Delayed o) {
 
 #### 5. PriorityBlockingQueue —— 优先级任务
 
-内部还是二叉堆，只是包了锁和 `Condition`。**它是无界的，`put` 永远不会阻塞**，读取时按优先级出队。
+内部还是二叉堆，只是包了锁和 `Condition`。**它是无界的，`put` 永远不会阻塞，`take`空队列时会阻塞**，读取时按优先级出队。
 
 ```java
+class Task{
+    private Integer priority;
+    public Task(Integer priority){
+        this.priority=priority;
+    }
+}
+
 BlockingQueue<Task> q = new PriorityBlockingQueue<>(
-        11, Comparator.comparingInt(Task::priority));
+        11, Comparator.comparingInt(Task::priority));//按照传入对象的指定字段排序
 
 q.put(new Task(5));    // 无界，put 不会阻塞
 Task t = q.take();     // 每次取优先级最高的
 ```
+
+##### **构造 `PriorityBlockingQueue`**
+
+```java
+new PriorityBlockingQueue<>(11, Comparator.comparingInt(Task::priority))
+```
+
+
+
+- **第一个参数 `11`**：初始容量（initial capacity）。注意它**不是上限**，只是内部数组的初始大小。队列会根据需要自动扩容。
+- **第二个参数 `Comparator`**：优先级比较器。`Comparator.comparingInt(Task::priority)` 表示==按 `Task.priority` 这个 int 字段排序。==
+
+
+
+##### **关键点：优先级的"高低"**
+
+`PriorityBlockingQueue` 是基于**最小堆**实现的，`take()` 返回的是**比较器意义上"最小"的元素**。
+
+`comparingInt(Task::priority)` 会让 **priority 数值最小的排在堆顶**。
+
+所以这里要明确语义：
+
+- 如果你的约定是"数值越小优先级越高"（如 1 = 最高），那么这段代码正好，`take()` 取到 priority 最小的。
+- 如果你想要"数值越大优先级越高"（如 5 比 1 更重要），需要**反转比较器**：
+
+```java
+Comparator.comparingInt(Task::priority).reversed()
+```
+
+否则你拿到的会是"优先级最低"的任务。**这是最常见的坑。**
+
+
+
+##### 几个必须知道的注意点
+
+1. **堆序 ≠ 全排序**：`PriorityBlockingQueue` 只保证堆顶是最小（最优）的，**内部数组并不是有序的**。用 `toString()` 或遍历看到的顺序没有意义，不要依赖。若需要有序输出，应反复 `take()` 或 `poll()`。
+2. **元素可变性问题**：`Task` 的 `priority` 字段如果在入队后被修改，堆的结构不会自动重排，会导致行为错乱。**入队后不要修改参与比较的字段**（或干脆让 `Task` 不可变）。更好的做法是让 `Task implements Comparable<Task>`，而不是外部传 `Comparator`。
+3. **不允许 `null`**：`PriorityBlockingQueue` 不能放 `null`，会抛 `NullPointerException`。
+4. **`equals` 与比较器要一致**：`PriorityBlockingQueue` 用比较器判断元素顺序，但不依赖 `equals` 去重。它**允许重复元素**（相同 priority 的多个任务都可以入队）。
+5. **线程安全**：所有操作内部用一把 `ReentrantLock` 保护，多线程安全。但注意它**不是** `ConcurrentSkipList` 那类无锁结构，高并发下同一把锁是瓶颈。
+6. **`take()` 会阻塞**：在单线程里如果队列为空就 `take()`，会永久阻塞。做实验时可用 `poll(timeout, unit)` 或 `poll()`（非阻塞，空则返回 `null`）避免卡死。
 
 #### 6. ConcurrentLinkedQueue —— 无锁高并发
 
@@ -1873,6 +1938,7 @@ Task t = q.take();     // 每次取优先级最高的
 Queue<String> q = new ConcurrentLinkedQueue<>();
 
 q.offer("a");
+q.add("b");//这里的add()内部引用了offer(),和offer()效果一致
 q.poll();          // 无锁、非阻塞，空队列返回 null
 
 // size() 要遍历链表：O(n) 且弱一致
@@ -1891,5 +1957,66 @@ int top = stack.pop();
 Deque<Integer> queue = new ArrayDeque<>();
 queue.offer(1);         // 当队列
 queue.poll();
-queue.offerFirst(0);    // 当双端队列
+queue.offerFirst(0);    // 当双端队列.First代表从头，Last代表从尾
 ```
+
+```java
+public void push(E e) {
+    addFirst(e);
+}
+
+public E pop() {
+    return removeFirst();
+}
+
+public boolean offer(E e) {
+    return offerLast(e);
+}
+public E poll() {
+    return pollFirst();
+}
+```
+
+> 一个双端队列是不是要求两段都得先进后出啊？
+
+**不是的。** 这是一个非常容易混淆的误区。
+
+双端队列（Deque, Double Ended Queue）的名字容易让人误解，它**不强制**要求“两端都必须先进后出”。它的核心定义仅仅是：**两端都可以插入，两端都可以删除**。
+
+至于数据到底是先进先出（FIFO）还是先进后出（LIFO），**完全取决于你调用哪一组方法，以及你把它当什么用**。
+
+我们可以从以下三个方面来理解：
+
+1. **它是“万能”的，可以实现 FIFO 或 LIFO**
+
+因为两端都能进出，所以你可以自由组合：
+
+- **当普通队列（FIFO）用**：左边进，右边出（或者右边进，左边出）。比如：`offerLast()` 进，`pollFirst()` 出。
+- **当栈（LIFO）用**：左边进，左边出（或者右边进，右边出）。比如：`offerFirst()` 进，`pollFirst()` 出。
+
+2. **数据是单向流动的**
+
+在一个双端队列里，**同一个元素**不可能既按 FIFO 又按 LIFO 被取出。
+你在左边放了一个数据，如果你想先进先出，那你就在右边拿；如果你想后进先出，那你就在同一边拿。对于队列中的整体数据来说，它仍然是遵循一个**单一的进出方向**的。
+
+3**.两端的方法是对称的**
+
+Java 里的 `Deque` 接口，把方法按**操作位置**和**异常处理方式**分成了四组，非常整齐：
+
+| 操作位置                 | 头部（First）   | 尾部（Last）   |
+| :----------------------- | :-------------- | :------------- |
+| **插入（抛异常）**       | `addFirst(e)`   | `addLast(e)`   |
+| **插入（返回 boolean）** | `offerFirst(e)` | `offerLast(e)` |
+| **删除（抛异常）**       | `removeFirst()` | `removeLast()` |
+| **删除（返回 null）**    | `pollFirst()`   | `pollLast()`   |
+| **获取（抛异常）**       | `getFirst()`    | `getLast()`    |
+| **获取（返回 null）**    | `peekFirst()`   | `peekLast()`   |
+
+由于它完全兼容普通的 `Queue` 接口，如果你只调用 `offer()` 或 `poll()`：
+
+- `Deque.offer()` 默认等同于 `offerLast()`（加到队尾）。
+- `Deque.poll()` 默认等同于 `pollFirst()`（从队头拿）。
+  这就变成了标准的 **FIFO（先进先出）** 队列。
+
+## 6.常用函数
+
