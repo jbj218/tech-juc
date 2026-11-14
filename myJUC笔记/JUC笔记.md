@@ -2020,3 +2020,17 @@ Java 里的 `Deque` 接口，把方法按**操作位置**和**异常处理方式
 
 ## 6.常用函数
 
+### 函数式接口
+
+#### 1.Comparator(函数式接口)和Comparable
+
+Java 的两个比较接口：`Comparable` 与 `Comparator`
+
+JDK 里做“比较排序”的接口就这两个：
+
+- **`Comparable<T>`** 是 `java.lang` 包中的接口，表示“**类自己知道自己怎么比**”，用于自然排序。
+- **`Comparator<T>`** 是 `java.util` 包中的接口，表示“**由外部给出一套比较规则**”，用于定制排序。
+
+一句话记忆：**`Comparable` 是内比较器（由类实现），`Comparator` 是外比较器（由外部提供）。**
+
+>  **`Comparable` 定义类自己的默认顺序（一套、写在类里）；`Comparator` 从外部指定顺序（可多套、不修改类）。排序时二选一，给了 `Comparator` 就用它，否则回退到 `Comparable`。**
