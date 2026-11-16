@@ -1208,8 +1208,6 @@ public class SimpleLock {
 
 ### Future基础应用
 
-
-
 ### CompletableFuture
 
 #### 为什么需要 CompletableFuture？
@@ -2034,3 +2032,113 @@ JDK 里做“比较排序”的接口就这两个：
 一句话记忆：**`Comparable` 是内比较器（由类实现），`Comparator` 是外比较器（由外部提供）。**
 
 >  **`Comparable` 定义类自己的默认顺序（一套、写在类里）；`Comparator` 从外部指定顺序（可多套、不修改类）。排序时二选一，给了 `Comparator` 就用它，否则回退到 `Comparable`。**
+
+##### **1.1 两者对比**
+
+| 维度           | `Comparable`                                              | `Comparator`                |
+| -------------- | --------------------------------------------------------- | --------------------------- |
+| 所在包         | `java.lang`                                               | `java.util`                 |
+| 方法           | `int compareTo(T o)`                                      | `int compare(T o1, T o2)`   |
+| 比较逻辑放在哪 | 类内部                                                    | 类外部                      |
+| 排序规则数量   | 只能有一套“自然顺序”                                      | 可以随意定义多套            |
+| 是否要修改类   | 要                                                        | 不要                        |
+| 能否 lambda    | 不常用（语义是 this 比别人）                              | 可以，函数式接口            |
+| 主要使用者     | `Collections.sort`、`TreeSet`、`TreeMap`、`PriorityQueue` | 同上，全部支持              |
+| 典型例子       | `String`、`Integer`、`BigDecimal`                         | `Comparator.comparing(...)` |
+
+##### **1.2 Comparator常用工具方法（用于简化开发）**
+
+| 方法                                        | 作用                                    |
+| ------------------------------------------- | --------------------------------------- |
+| `Comparator.comparing(Function)`            | 按某个字段比较（字段需实现 Comparable） |
+| `Comparator.comparingInt/Long/Double`       | 按基本类型字段比较，免装箱              |
+| `Comparator.naturalOrder()`                 | 自然顺序                                |
+| `Comparator.reverseOrder()`                 | 自然顺序反过来                          |
+| `Comparator.nullsFirst(c)` / `nullsLast(c)` | 处理 null 值                            |
+| `cmp.thenComparing(...)`                    | 多级排序                                |
+| `cmp.reversed()`                            | 反转当前比较器                          |
+
+> 注意 `reversed()` 作用于它前面的整条链：`comparing(a).thenComparing(b).reversed()` 会同时反转 a 和 b；想只反转 a，要写成 `comparing(a).reversed().thenComparing(b)`。
+
+##### 1.3 代码示例
+
+~~~java
+package com.kuang.function.my;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+
+public class ComparatorAndComparable {
+    public static void main(String[] args) {
+        //1.Comparable 内部定义
+        Person person = new Person("jbj111", 18);
+        Person person1 = new Person("wjg22", 19);
+        Person person2 = new Person("jhy3", 20);
+        ArrayList<Person> people = new ArrayList<>();
+        people.add(person);
+        people.add(person2);
+        people.add(person1);
+        //排序前
+        System.out.println("排序前结果：");
+        people.forEach(System.out::println);
+        Collections.sort(people);
+        System.out.println("排序后结果：");
+        people.forEach(System.out::println);
+
+        //2.Comparator 外部定义，优先用外部的比较规则如果没有外部规则才用内部的原生规则
+        //2.1 匿名内部类
+        /*Collections.sort(people, new Comparator<Person>() {
+            @Override
+            public int compare(Person o1, Person o2) {
+                //定义按照名字长度来排序
+                return Integer.compare(o1.getName().length(), o2.getName().length());
+            }
+        });*/
+        //2.2 Lambda表达式
+        /*Collections.sort(people, (o1, o2) ->
+                Integer.compare(o1.getName().length(), o2.getName().length()));
+        System.out.println("Comparator排序后结果：");
+        people.forEach(System.out::println);*/
+        //2.3 工具方法（Java 8+,实际开发常用）
+        //帮你封装好比较的逻辑，只需要传入需要比较的属性
+        Collections.sort(people, Comparator.comparing(p -> p.getName().length()));
+        System.out.println("Comparator排序后结果：");
+        people.forEach(System.out::println);
+    }
+
+}
+//Comparable 内部定义原生排序属性
+class Person implements Comparable<Person> {
+    private String name;
+    private int age;
+
+    public Person(String name, int age) {
+        this.name = name;
+        this.age = age;
+    }
+
+    @Override
+    public int compareTo(Person o) {
+        return Long.compare(this.age, o.age);
+    }
+
+    @Override
+    public String toString() {
+        return "Person{" +
+                "name='" + name + '\'' +
+                ", age=" + age +
+                '}';
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public int getAge() {
+        return age;
+    }
+}
+
+~~~
+
