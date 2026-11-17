@@ -2142,3 +2142,110 @@ class Person implements Comparable<Person> {
 
 ~~~
 
+#### 2.Function<T,R>
+
+**函数式：有参有返回，输入T返回R**
+
+~~~java
+@FunctionalInterface
+public interface Function<T, R> {
+
+    /**
+     * Applies this function to the given argument.
+     *
+     * @param t the function argument
+     * @return the function result
+     */
+    R apply(T t);
+~~~
+
+#### 3.Consumer<T>
+
+**消费式：有参无返回，输入T**
+
+~~~java
+@FunctionalInterface
+public interface Consumer<T> {
+
+    /**
+     * Performs this operation on the given argument.
+     *
+     * @param t the input argument
+     */
+    void accept(T t);
+~~~
+
+#### 4.Supplier<T>
+
+**供给式：无参有返回，返回T**
+
+~~~java
+@FunctionalInterface
+public interface Supplier<T> {
+
+    /**
+     * Gets a result.
+     *
+     * @return a result
+     */
+    T get();
+}
+~~~
+
+#### 5.Predicate<T>
+
+**断言式：有参有返回，输入T返回Boolean**
+
+~~~java
+@FunctionalInterface
+public interface Predicate<T> {
+
+    /**
+     * Evaluates this predicate on the given argument.
+     *
+     * @param t the input argument
+     * @return {@code true} if the input argument matches the predicate,
+     * otherwise {@code false}
+     */
+    boolean test(T t);
+~~~
+
+#### 实际使用
+
+~~~java
+package com.kuang.function.my;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
+
+public class Function4Use {
+    public static void main(String[] args) {
+        ArrayList<Integer> list = new ArrayList<>();
+        list.add(1);
+        list.add(2);
+        list.add(3);
+        list.add(4);
+        list.add(5);
+        list.add(6);
+        //1.Stream流使用函数接口
+        list.stream()
+                .filter(num->num>3)//Predicate 断言式
+                .map(num->num*2)//Function 函数式
+                .forEach(num-> System.out.println(num));//Consumer 消费式
+        List<Integer> newlist = list.stream()
+                .filter(num -> num > 3)//Predicate 断言式
+                .map(num -> num * 2)//Function 函数式
+                .collect(Collectors.toList());//Supplier 供给式
+        //2.CompletableFuture 异步回调
+        //默认线程池ForkJoinPool.commonPool()
+        CompletableFuture
+                .supplyAsync(()->{return "hello";})//Supplier 供给式
+                .thenApply(s->s+" world")//Function 函数式
+                .thenAccept(s-> System.out.println(s));//Consumer 消费式
+    }
+}
+
+~~~
+
