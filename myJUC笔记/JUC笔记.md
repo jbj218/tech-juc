@@ -1206,7 +1206,41 @@ public class SimpleLock {
 
 ### 线程中断
 
+#### 1.中断只传递协作信号
+
+`interrupt()` 只是给目标线程设置一个**标志位**，**并不会强行终止线程**；线程是否响应、如何响应，由线程自己决定。
+
+即只有线程任务主动获取中断标识，再决定是否中断执行操作，置标志位本身并不会中断线程。
+
+```java
+Thread t = new Thread(() -> {
+    while (!Thread.currentThread().isInterrupted()) {
+        // 干活
+    }
+    System.out.println("收到中断，退出循环");
+});
+t.start();
+t.interrupt();   // 只是把标志位设为 true
+```
+
+#### 2. 三个方法必须分清
+
+| 方法                   | 作用                  | 是否清除标志         |
+| ---------------------- | --------------------- | -------------------- |
+| `t.interrupt()`        | 给线程 t 设置中断标志 | 否（设置）           |
+| `t.isInterrupted()`    | 查询标志              | 否                   |
+| `Thread.interrupted()` | 查询**当前线程**标志  | **是**（查询并清除） |
+
+```java
+Thread.currentThread().interrupt();      // 设置
+Thread.currentThread().isInterrupted();  // true
+Thread.interrupted();                    // true，并且标志被清掉
+Thread.currentThread().isInterrupted();  // false
+```
+
 ### Future基础应用
+
+
 
 ### CompletableFuture
 
