@@ -1210,7 +1210,7 @@ public class SimpleLock {
 
 `interrupt()` 只是给目标线程设置一个**标志位**，**并不会强行终止线程**；线程是否响应、如何响应，由线程自己决定。
 
-即只有线程任务主动获取中断标识，再决定是否中断执行操作，置标志位本身并不会中断线程。
+**tip:即只有线程任务主动获取中断标识，再决定是否中断执行操作，置标志位本身并不会中断线程。**
 
 ```java
 Thread t = new Thread(() -> {
@@ -1237,6 +1237,80 @@ Thread.currentThread().isInterrupted();  // true
 Thread.interrupted();                    // true，并且标志被清掉
 Thread.currentThread().isInterrupted();  // false
 ```
+
+#### 3. 哪些操作会被“整个”打断
+
+当线程阻塞在这些方法上时，`interrupt()` 会让它们**抛 `InterruptedException` 并清除中断标志**：
+
+**tip:即这些方法会自动检测当下标志位状态,然后抛异常从而中断线程并清除中断标志**
+
+- `Object.wait()`、`Thread.sleep()`、`Thread.join()`
+- `BlockingQueue.put/take/poll`、`SynchronousQueue`
+- `Lock.lockInterruptibly()`、`Condition.await()`
+- `Semaphore.acquire()`、`CountDownLatch.await()`、`CyclicBarrier.await()`
+- `Future.get()`
+- `InterruptibleChannel` 的 IO
+
+以下操作**不会**响应中断：
+
+- `synchronized` 等锁
+- `ReentrantLock.lock()`（要响应中断，应使用 `lockInterruptibly()`）
+- 纯 CPU 计算（需要自己检查标志位）
+- 老式阻塞 IO（`InputStream.read()` 等）
+
+#### 4. 标准处理方式
+
+**要么继续向上抛，要么恢复标志位然后退出**；不要吞掉异常继续运行：
+
+```java
+try {
+    Thread.sleep(1000);
+} catch (InterruptedException e) {
+    Thread.currentThread().interrupt();  // 恢复标志，交给上层决定
+    return;                              // 或者 break / 抛出
+}
+```
+
+如果吞掉异常继续执行：
+
+```java
+try {
+    queue.take();
+} catch (InterruptedException e) {
+    // 什么都没做
+}
+// 线程池 shutdownNow() 之后，这个线程还在跑，永远不会停
+```
+
+#### 5. 优雅停止一个消费者线程
+
+```java
+class Worker implements Runnable {
+    private final BlockingQueue<String> queue;
+
+    Worker(BlockingQueue<String> queue) { this.queue = queue; }
+
+    @Override
+    public void run() {
+        try {
+            while (!Thread.currentThread().isInterrupted()) {
+                String msg = queue.take();   // 阻塞，可被中断
+                handle(msg);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();   // 恢复标志true
+        } finally {
+            cleanup();
+        }
+    }
+}
+```
+
+> `while (!Thread.currentThread().isInterrupted()) `这个不就已近可以检测到中断信号然后中断任务了吗？
+
+**`while` 条件处理的是“线程正在运行、可以检查中断标志”的情况；`take()` 抛出的异常处理的是“线程阻塞在等待中、无法执行检查”的情况。** 消费者大部分时间都停在 `take()` 上，所以异常路径是必需的，它负责让阻塞中的线程收到中断并退出。
+
+
 
 ### Future基础应用
 
