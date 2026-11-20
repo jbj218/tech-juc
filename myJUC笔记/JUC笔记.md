@@ -270,8 +270,6 @@ class Data{ // 数字 资源类
 
 以 `FutureTask` 的实现为例，`cancel(true)` 和 `cancel(false)` 的共同点远大于差异：
 
-java
-
 ```java
 public boolean cancel(boolean mayInterruptIfRunning) {
     // 1. 状态机 CAS：NEW -> CANCELLED（false）或 NEW -> INTERRUPTING（true）
@@ -1240,7 +1238,7 @@ Thread.currentThread().isInterrupted();  // false
 
 #### 3. 哪些操作会被“整个”打断
 
-当线程阻塞在这些方法上时，`interrupt()` 会让它们**抛 `InterruptedException` 并清除中断标志**：
+当线程阻塞在这些方法上时且此时的线程标识为`true`，`interrupt()` 会让它们**抛 `InterruptedException` 并清除中断标志**：
 
 **tip:即这些方法会自动检测当下标志位状态,然后抛异常从而中断线程并清除中断标志**
 
